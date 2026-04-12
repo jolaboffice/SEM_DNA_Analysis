@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# Data & outputs
+*.tif
+*.joblib
+*.xlsx
+endpoints.json
+pxum_config.json
+
+# Generated images
+overlay/
+trace/
+edgewidth/
+heatmap/
+
+# OS
+.DS_Store
+Thumbs.db

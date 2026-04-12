@@ -1,0 +1,8 @@
+numpy
+scipy
+scikit-image
+scikit-learn
+joblib
+Pillow
+matplotlib
+openpyxl
