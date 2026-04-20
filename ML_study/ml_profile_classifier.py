@@ -34,7 +34,7 @@ from sklearn.metrics import (f1_score, precision_score, recall_score,
                              classification_report, confusion_matrix)
 
 HERE = os.path.dirname(__file__)
-XLSX_GLOB = os.path.join(HERE, 'heatmap', '**', '*_profile_heatmap.xlsx')
+XLSX_GLOB = os.path.join(HERE, '*_profile_heatmap.xlsx')
 
 # Project root holds the unified pxum_config.json (px per µm) used by all
 # scripts. Internally we still work in nm/px (NM_RANGE etc.) for backward
@@ -305,44 +305,35 @@ def apply_min_run(pred, trace_idx, src, min_run=5):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exclude', type=str, default=None,
-                        help='Comma-separated image names to exclude from '
-                             'training (e.g. "rrvt_64")')
-    parser.add_argument('--suffix', type=str, default='',
-                        help='Suffix for output filenames '
-                             '(e.g. "_no_rrvt" → profile_classifier_no_rrvt.joblib)')
-    parser.add_argument('--smooth_w', type=int, default=7,
-                        help='Post-processing smoothing window (default 7)')
-    parser.add_argument('--min_run', type=int, default=9,
-                        help='Post-processing minimum run length (default 9)')
+    parser.add_argument('--dir', type=str, default=None,
+                        help='Directory containing *_profile_heatmap.xlsx '
+                             '(defaults to script directory)')
+    parser.add_argument('--smooth_w', type=int, default=-1,
+                        help='Force post-processing smoothing window '
+                             '(default: auto-selected by grid sweep)')
+    parser.add_argument('--min_run', type=int, default=-1,
+                        help='Force post-processing minimum run length '
+                             '(default: auto-selected by grid sweep)')
     parser.add_argument('--pixel', action='store_true',
-                        help='Use pixel-grid profiles (no nm resampling). '
-                             'Required for the short model.')
+                        help='Use pixel-grid profiles (no nm resampling)')
     parser.add_argument('--nm_range', type=float, default=NM_RANGE,
                         help=f'Half-range of nm grid (default {NM_RANGE})')
     parser.add_argument('--smooth_nm', type=float, default=None,
-                        help='Post-processing smoothing window in nm '
-                             '(for nm_resampled mode)')
+                        help='Post-processing smoothing window in nm')
     parser.add_argument('--min_run_nm', type=float, default=None,
-                        help='Post-processing minimum run length in nm '
-                             '(for nm_resampled mode)')
-    parser.add_argument('--dir', type=str, default=None,
-                        help='Directory containing *_profile_heatmap.xlsx')
-    parser.add_argument('--force_model', type=str, default=None,
-                        help='Force a specific model (e.g. CalibratedRF)')
+                        help='Post-processing minimum run length in nm')
     parser.add_argument('--pxum', type=float, default=None,
                         help='Default px/µm for training images missing from '
                              'pxum_config.json (auto-saved).')
     args = parser.parse_args()
 
-    out_model = os.path.join(HERE, f'profile_classifier{args.suffix}.joblib')
-    out_report = os.path.join(HERE, f'profile_classifier{args.suffix}_report.txt')
-    out_pred = os.path.join(HERE, f'profile_classifier{args.suffix}_predictions.xlsx')
+    out_model = os.path.join(HERE, 'profile_classifier.joblib')
+    out_report = os.path.join(HERE, 'profile_classifier_report.txt')
+    out_pred = os.path.join(HERE, 'profile_classifier_predictions.xlsx')
 
     # Discover training image names from heatmap xlsx filenames so we can
     # prompt for any missing px/µm entries before training.
-    xlsx_glob = os.path.join(args.dir or os.path.join(HERE, 'heatmap'),
-                             '*_profile_heatmap.xlsx')
+    xlsx_glob = os.path.join(args.dir or HERE, '*_profile_heatmap.xlsx')
     training_files = sorted(glob.glob(xlsx_glob))
     training_names = [
         os.path.basename(f).replace('_profile_heatmap.xlsx', '')
@@ -361,14 +352,6 @@ def main():
         pxnm_for_load = pxnm_config
     trace_idx, P, y, src = load_all(xlsx_glob, pxnm_for_load,
                                      nm_range=args.nm_range)
-
-    if args.exclude:
-        excl = set(s.strip() for s in args.exclude.split(','))
-        keep = ~np.isin(src, list(excl))
-        print(f"\nExcluding images: {sorted(excl)}")
-        print(f"  before: {len(y)} rows ({y.sum()} pos)")
-        trace_idx, P, y, src = trace_idx[keep], P[keep], y[keep], src[keep]
-        print(f"  after:  {len(y)} rows ({y.sum()} pos)")
     print(f"\nTotal profiles: {P.shape[0]}  (pos={y.sum()}, neg={(y==0).sum()})")
 
     # drop all-NaN rows
@@ -384,34 +367,11 @@ def main():
     print(f"Features: {X.shape[1]} -> {feat_names}")
 
     imputer = SimpleImputer(strategy='median')
+    # Single-model pipeline: CalibratedRF wraps a RandomForest with
+    # sigmoid calibration (CV=5). Post-processing
+    # (smoothing window, min run) and threshold are still re-determined for
+    # the new training data via the grid search below.
     models = {
-        'LogReg': Pipeline([
-            ('imp', imputer), ('sc', StandardScaler()),
-            ('clf', LogisticRegression(max_iter=2000, C=0.5,
-                                       class_weight='balanced'))]),
-        'RandomForest': Pipeline([
-            ('imp', imputer),
-            ('clf', RandomForestClassifier(
-                n_estimators=600, max_depth=None, min_samples_leaf=2,
-                max_features='sqrt',
-                class_weight='balanced_subsample', random_state=42, n_jobs=-1))]),
-        'ExtraTrees': Pipeline([
-            ('imp', imputer),
-            ('clf', ExtraTreesClassifier(
-                n_estimators=600, max_depth=None, min_samples_leaf=2,
-                max_features='sqrt',
-                class_weight='balanced_subsample', random_state=42, n_jobs=-1))]),
-        'GradBoost': Pipeline([
-            ('imp', imputer),
-            ('clf', GradientBoostingClassifier(
-                n_estimators=400, max_depth=4, learning_rate=0.05,
-                subsample=0.8, random_state=42))]),
-        'HistGB': Pipeline([
-            ('imp', imputer),
-            ('clf', HistGradientBoostingClassifier(
-                max_depth=6, max_iter=500, learning_rate=0.05,
-                min_samples_leaf=20, l2_regularization=0.1,
-                class_weight='balanced', random_state=42))]),
         'CalibratedRF': Pipeline([
             ('imp', imputer),
             ('clf', CalibratedClassifierCV(
@@ -422,23 +382,6 @@ def main():
                     n_jobs=-1),
                 cv=5, method='sigmoid'))]),
     }
-
-    # Soft-voting ensemble of tree-based models
-    voting = VotingClassifier(
-        estimators=[
-            ('rf', RandomForestClassifier(
-                n_estimators=600, min_samples_leaf=2, max_features='sqrt',
-                class_weight='balanced_subsample', random_state=42, n_jobs=-1)),
-            ('et', ExtraTreesClassifier(
-                n_estimators=600, min_samples_leaf=2, max_features='sqrt',
-                class_weight='balanced_subsample', random_state=42, n_jobs=-1)),
-            ('hgb', HistGradientBoostingClassifier(
-                max_depth=6, max_iter=500, learning_rate=0.05,
-                min_samples_leaf=20, l2_regularization=0.1,
-                class_weight='balanced', random_state=42)),
-        ],
-        voting='soft', n_jobs=-1)
-    models['Voting(RF+ET+HGB)'] = Pipeline([('imp', imputer), ('clf', voting)])
 
     # Choose CV: only use GroupKFold if ≥2 images carry positives.
     unique_src = np.unique(src)
@@ -500,55 +443,79 @@ def main():
             print(f"  {s:40s} pos={npos:4d} neg={nneg:4d}  "
                   f"TP={tp:4d} FP={fp:4d} FN={fn:4d}")
 
-    if args.force_model:
-        best = next((r for r in results if r['name'] == args.force_model), None)
-        if best is None:
-            print(f"Error: model '{args.force_model}' not found. "
-                  f"Available: {[r['name'] for r in results]}")
-            return
-        print(f"\nForced model: {best['name']}  F1={best['f1@best']:.3f}  "
-              f"threshold={best['best_threshold']:.2f}")
-    else:
-        best = max(results, key=lambda d: d['f1@best'])
+    best = max(results, key=lambda d: d['f1@best'])
     print(f"\nBest model: {best['name']}  F1={best['f1@best']:.3f}  "
           f"threshold={best['best_threshold']:.2f}")
 
-    # ── Post-processing: spatial smoothing + min-run filter along trace ──
-    print("\n── Post-processing (spatial smoothing along trace) ──")
-    for w in (5, 7, 11, 15):
-        sm = smooth_proba_along_trace(best['proba'], trace_idx, src, window=w)
-        # find best threshold on smoothed
-        ts = np.linspace(0.05, 0.95, 91)
-        f1s = [f1_score(y, (sm >= t).astype(int), zero_division=0) for t in ts]
-        t_best = ts[int(np.argmax(f1s))]
-        pred_sm = (sm >= t_best).astype(int)
-        f1_sm = max(f1s)
-        p_sm = precision_score(y, pred_sm, zero_division=0)
-        r_sm = recall_score(y, pred_sm, zero_division=0)
-        print(f"  smooth w={w:2d}: F1={f1_sm:.3f} P={p_sm:.3f} R={r_sm:.3f} "
-              f"(t={t_best:.2f})")
-
-    # Choose final: smooth w=7 + min_run=9 (min run preserves user's
-    # shortest labeled run; F1 nearly matches min_run=10 but avoids
-    # killing legitimate short positives)
-    best_pp_w = args.smooth_w
-    best_min_run = args.min_run
-    sm_final = smooth_proba_along_trace(best['proba'], trace_idx, src,
-                                         window=best_pp_w)
+    # ── Post-processing grid sweep (smooth_w × min_run × threshold) ──
+    # Full grid search over post-processing params on raw CV proba.
+    # CLI --smooth_w / --min_run override and skip the sweep when both set
+    # explicitly (default sentinels = -1 mean "sweep").
+    raw_proba = best['proba'].copy()
     ts = np.linspace(0.05, 0.95, 91)
-    best_f1 = 0.0; t_final = 0.5
-    for t in ts:
-        p = (sm_final >= t).astype(int)
-        p = apply_min_run(p, trace_idx, src, min_run=best_min_run)
-        f1 = f1_score(y, p, zero_division=0)
-        if f1 > best_f1:
-            best_f1, t_final = f1, t
-    pred_final = apply_min_run(
-        (sm_final >= t_final).astype(int), trace_idx, src,
-        min_run=best_min_run)
+    sweep_smooth = (1, 3, 5, 7, 9, 11, 15, 21)
+    sweep_min_run = (1, 3, 5, 7, 9, 13, 17, 25)
+    sweep_results = []
+    print("\n── Post-processing grid sweep (smooth_w × min_run) ──")
+    print("  smooth_w  min_run    F1     P     R    threshold")
+    for w in sweep_smooth:
+        sm = (smooth_proba_along_trace(raw_proba, trace_idx, src, window=w)
+              if w > 1 else raw_proba)
+        for mr in sweep_min_run:
+            best_f1_pp = -1.0; t_pp = 0.5; p_pp = r_pp = 0.0
+            for t in ts:
+                pred_t = (sm >= t).astype(int)
+                if mr > 1:
+                    pred_t = apply_min_run(pred_t, trace_idx, src, min_run=mr)
+                f1 = f1_score(y, pred_t, zero_division=0)
+                if f1 > best_f1_pp:
+                    best_f1_pp = f1
+                    t_pp = t
+                    p_pp = precision_score(y, pred_t, zero_division=0)
+                    r_pp = recall_score(y, pred_t, zero_division=0)
+            sweep_results.append((best_f1_pp, w, mr, t_pp, p_pp, r_pp))
+            print(f"  {w:8d}  {mr:7d}  {best_f1_pp:.3f}  {p_pp:.3f}  "
+                  f"{r_pp:.3f}    {t_pp:.2f}")
+
+    sweep_results.sort(key=lambda x: -x[0])
+    print("\n── Top 10 (smooth_w, min_run) by F1 ──")
+    for f1v, w, mr, t, pv, rv in sweep_results[:10]:
+        print(f"  smooth_w={w:2d}  min_run={mr:2d}  F1={f1v:.4f}  "
+              f"P={pv:.3f}  R={rv:.3f}  t={t:.2f}")
+
+    if args.smooth_w >= 0 and args.min_run >= 0:
+        best_pp_w = args.smooth_w
+        best_min_run = args.min_run
+        # find best threshold for the forced (w, mr)
+        sm_final = (smooth_proba_along_trace(raw_proba, trace_idx, src,
+                                              window=best_pp_w)
+                    if best_pp_w > 1 else raw_proba)
+        best_f1 = -1.0; t_final = 0.5
+        for t in ts:
+            pred_t = (sm_final >= t).astype(int)
+            if best_min_run > 1:
+                pred_t = apply_min_run(pred_t, trace_idx, src,
+                                        min_run=best_min_run)
+            f1 = f1_score(y, pred_t, zero_division=0)
+            if f1 > best_f1:
+                best_f1, t_final = f1, t
+        print(f"\n── Forced post-proc: smooth_w={best_pp_w}, "
+              f"min_run={best_min_run}, threshold={t_final:.2f}, "
+              f"F1={best_f1:.4f} ──")
+    else:
+        best_f1, best_pp_w, best_min_run, t_final, _, _ = sweep_results[0]
+        sm_final = (smooth_proba_along_trace(raw_proba, trace_idx, src,
+                                              window=best_pp_w)
+                    if best_pp_w > 1 else raw_proba)
+        print(f"\n── Auto-selected: smooth_w={best_pp_w}, "
+              f"min_run={best_min_run}, threshold={t_final:.2f}, "
+              f"F1={best_f1:.4f} ──")
+
+    pred_final = (sm_final >= t_final).astype(int)
+    if best_min_run > 1:
+        pred_final = apply_min_run(pred_final, trace_idx, src,
+                                    min_run=best_min_run)
     f1_final = best_f1
-    print(f"\n── Final: smooth w={best_pp_w}, min_run={best_min_run}, "
-          f"threshold={t_final:.2f}, F1={f1_final:.3f} ──")
 
     # per-image breakdown for final
     print("Per-image breakdown (final, post-processed):")
@@ -754,8 +721,6 @@ def main():
         from joblib import load as _joblib_load
         model_info = _joblib_load(out_model)
         ep_cache = _predict_mod.load_endpoints_cache()
-        # Resolve model_type label from suffix (e.g. '_short' → 'short')
-        model_type_label = (args.suffix.lstrip('_') or 'continuous')
         tif_dir = os.path.join(HERE, 'tif')
         overlay_dir = os.path.join(HERE, 'overlay')
         os.makedirs(overlay_dir, exist_ok=True)
@@ -776,7 +741,7 @@ def main():
             ep = ep_cache.get(str(img_name))
             try:
                 _predict_mod.process(
-                    tif_path, model_info, model_type_label,
+                    tif_path, model_info,
                     pxnm=px_nm, out_dir=overlay_dir,
                     truth=truth, endpoints=ep)
                 n_made += 1

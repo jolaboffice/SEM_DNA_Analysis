@@ -17,7 +17,8 @@ Automated pipeline for tracing DNA backbones, measuring edge widths, and detecti
 (3) dna_profile_heatmap.py   -- Generate perpendicular profile heatmaps for labeling
        |                         (user labels protein-bound rows yellow in Excel)
        v
-(4) ml_profile_classifier.py -- Train classifier (CalibratedRF) on labeled profiles
+(4) ml_profile_classifier.py -- Train single CalibratedRF classifier on
+                                 labeled profiles (nm-resampled features)
        |
        v
 (5) predict.py               -- Predict binding on new images + overlay visualization
@@ -63,26 +64,34 @@ Open each `*_profile_heatmap.xlsx` and highlight protein-bound rows in yellow (`
 ### Step 4: Train classifier
 ```bash
 cd ML_study
-python ml_profile_classifier.py --dir heatmap/short --suffix _short --force_model CalibratedRF
+python ml_profile_classifier.py --dir path/to/heatmap_xlsx/
 ```
-Outputs: `profile_classifier_short.joblib`, `*_predictions.xlsx`, `*_report.txt`, per-image overlay PNGs
+Trains a single CalibratedRF pipeline on all `*_profile_heatmap.xlsx` files in the given directory. Profile cross-sections are nm-resampled to a common ±65 nm / 41-sample grid so images at different magnifications can be mixed. After CV, a grid sweep over `(smooth_w × min_run × threshold)` auto-selects the best post-processing.
+
+Outputs: `profile_classifier.joblib`, `profile_classifier_predictions.xlsx`, `profile_classifier_report.txt`, per-image overlay PNGs.
 
 ### Step 5: Predict binding on new images
 ```bash
-python predict.py tif/ --model short
-python predict.py tif/ --model continuous
+python predict.py tif/
+python predict.py tif/ --no-interactive    # skip endpoint GUI picker
 ```
-Outputs: `short_predictions.xlsx` (summary + runs + per-trace predictions), overlay PNGs with 3-panel layout
+Outputs: `predictions.xlsx` (summary + runs + per-trace predictions), overlay PNGs with 3-panel layout.
+
+### (Optional) Feature-analysis figure
+```bash
+python plot_feature_analysis.py --image Alu4 --xlsx_dir path/to/heatmap_xlsx/
+```
+Produces a two-panel figure: (a) mean bare vs protein-bound profile for the chosen image with SEM bands, (b) top feature importances of the trained classifier.
 
 ## Output Excel Structure
 
-### predictions xlsx (from predict.py)
+### predictions.xlsx (from predict.py)
 - **summary**: per-image N_pos, N_runs, run lengths
 - **runs**: per positive run edge width (px, nm), left/right edge positions
 - **predictions**: per-trace-point proba_raw, proba_smoothed, pred (0/1)
 - **{image}**: per-image detail sheets
 
-### profile_classifier xlsx (from ml_profile_classifier.py)
+### profile_classifier_predictions.xlsx (from ml_profile_classifier.py)
 - **predictions**: CV per-trace-point true_yellow, proba, pred@best_threshold
 - **runs**: per positive run edge width, signal_type (true/pred)
 
@@ -100,8 +109,9 @@ Three-panel visualization:
 | `half_width` | 20 px | Perpendicular profile extraction radius |
 | `NM_RANGE` | 65 nm | Common nm grid half-range for profile resampling |
 | `NM_SAMPLES` | 41 | Number of samples on the nm grid |
-| `smooth_w` | 7 | Post-processing smoothing window (trace-px) |
-| `min_run` | 5 | Minimum positive run length (trace-px) |
+| `smooth_w` | auto | Post-processing smoothing window (trace-px, swept over {1,3,5,7,9,11,15,21}) |
+| `min_run` | auto | Minimum positive run length (trace-px, swept over {1,3,5,7,9,13,17,25}) |
+| `threshold` | auto | Decision threshold (grid-searched over 0.05–0.95 by F1) |
 
 ## Scale Configuration
 

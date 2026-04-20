@@ -1,11 +1,9 @@
 """
-Predict DNA-protein binding using trained classifiers.
+Predict DNA-protein binding using the trained classifier.
 
 Usage:
-    python predict.py image.tif --model short
-    python predict.py tif/ --model short
-    python predict.py image.tif --model continuous
-    python predict.py tif/ --model continuous
+    python predict.py image.tif
+    python predict.py tif/
 
 Per-image px/µm scale must be present in pxum_config.json (no defaults).
 """
@@ -13,7 +11,6 @@ import argparse
 import glob
 import json
 import os
-import re
 import sys
 
 import numpy as np
@@ -40,52 +37,8 @@ from dna_edge_width import (
 
 HERE = os.path.dirname(__file__)
 ROOT = os.path.dirname(HERE)
-MODELS = {
-    'short': os.path.join(HERE, 'profile_classifier_short.joblib'),
-    'continuous': os.path.join(HERE, 'profile_classifier_continuous.joblib'),
-}
+MODEL_PATH = os.path.join(HERE, 'profile_classifier.joblib')
 ENDPOINTS_JSON = os.path.join(ROOT, 'endpoints.json')
-
-
-_NAME_SUFFIX_RE = re.compile(r'(?:_?\d+)$')
-
-
-def _name_prefix(name):
-    """Strip trailing numeric suffix (e.g. Alu11 -> Alu, rrvt_17 -> rrvt)."""
-    return _NAME_SUFFIX_RE.sub('', name)
-
-
-def other_mode_exclusion(mode):
-    """Return (exact_names, prefixes) that belong to the OTHER model only.
-
-    Uses heatmap/{mode}/*_profile_heatmap.xlsx training sets to infer which
-    image families each model owns; anything that appears only in the other
-    model's training set is excluded when running predict.py on a shared tif
-    folder.
-    """
-    heatmap_dir = os.path.join(HERE, 'heatmap')
-    modes = ('short', 'continuous')
-    sets = {}
-    for m in modes:
-        d = os.path.join(heatmap_dir, m)
-        if not os.path.isdir(d):
-            sets[m] = set()
-            continue
-        names = set()
-        for f in glob.glob(os.path.join(d, '*_profile_heatmap.xlsx')):
-            base = os.path.basename(f).replace('_profile_heatmap.xlsx', '')
-            names.add(base)
-        sets[m] = names
-
-    other = 'continuous' if mode == 'short' else 'short'
-    this_names = sets[mode]
-    other_names = sets[other]
-    this_prefixes = {_name_prefix(n) for n in this_names}
-    other_prefixes = {_name_prefix(n) for n in other_names}
-
-    excl_names = other_names - this_names
-    excl_prefixes = other_prefixes - this_prefixes
-    return excl_names, excl_prefixes
 
 
 def load_endpoints_cache():
@@ -130,7 +83,7 @@ def load_truth_xlsx(xlsx_path):
     return out
 
 
-def process(tif_path, model_info, model_type, pxnm=None, out_dir=None,
+def process(tif_path, model_info, pxnm=None, out_dir=None,
             truth=None, endpoints=None):
     name = os.path.splitext(os.path.basename(tif_path))[0]
     img = Image.open(tif_path)
@@ -205,7 +158,7 @@ def process(tif_path, model_info, model_type, pxnm=None, out_dir=None,
     pred_runs = runs_of(pred)
     run_lengths = [e - s for s, e in pred_runs]
     print(f"\n── {name}  ({w}x{h}) ──")
-    print(f"  model={model_type}, threshold={threshold:.2f}, "
+    print(f"  threshold={threshold:.2f}, "
           f"smooth_w={smooth_w}, min_run={min_run}")
     print(f"  predicted positive: {int(pred.sum())}")
     print(f"  predicted runs: {len(pred_runs)}  lengths={run_lengths}")
@@ -374,7 +327,7 @@ def process(tif_path, model_info, model_type, pxnm=None, out_dir=None,
     save_dir = out_dir or os.path.join(HERE, 'overlay')
     os.makedirs(save_dir, exist_ok=True)
     suffix = 'overlay' if true_labels is not None else 'predict'
-    out_path = os.path.join(save_dir, f'{name}_{model_type}_{suffix}.png')
+    out_path = os.path.join(save_dir, f'{name}_{suffix}.png')
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  saved overlay -> {out_path}")
@@ -384,34 +337,27 @@ def process(tif_path, model_info, model_type, pxnm=None, out_dir=None,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Predict DNA-protein binding using trained classifiers')
+        description='Predict DNA-protein binding using the trained classifier')
     parser.add_argument('input', help='Input .tif file or folder of .tif files')
     parser.add_argument('pxum', type=float, nargs='?', default=None,
                         help='Default px/µm for any image missing from '
                              'pxum_config.json (auto-saved).')
-    parser.add_argument('--model', required=True, choices=['short', 'continuous'],
-                        help='Model type to use')
     parser.add_argument('--out_dir', type=str, default=None,
                         help='Output directory for overlay PNGs')
     parser.add_argument('--truth_xlsx', type=str, default=None,
-                        help='CV predictions xlsx for TP/FP/FN overlay '
-                             '(e.g. profile_classifier_short_predictions.xlsx)')
-    parser.add_argument('--all', action='store_true',
-                        help='Disable auto-exclusion of images that belong to '
-                             "the other model's training family")
+                        help='CV predictions xlsx for TP/FP/FN overlay')
     parser.add_argument('--no-interactive', dest='interactive',
                         action='store_false', default=True,
                         help='Disable interactive endpoint picker for images '
                              'not in endpoints.json (use full-range instead)')
     args = parser.parse_args()
 
-    model_path = MODELS[args.model]
-    if not os.path.exists(model_path):
-        print(f"Error: model not found: {model_path}")
+    if not os.path.exists(MODEL_PATH):
+        print(f"Error: model not found: {MODEL_PATH}")
         sys.exit(1)
 
-    model_info = load(model_path)
-    print(f"Model: {args.model} ({model_info.get('model_name')})  "
+    model_info = load(MODEL_PATH)
+    print(f"Model: {model_info.get('model_name')}  "
           f"threshold={model_info['threshold']:.2f}  "
           f"post_process={model_info.get('post_process')}")
 
@@ -440,26 +386,6 @@ def main():
     else:
         tif_files = [args.input]
 
-    # auto-exclude images that belong to the other model's training family
-    if not args.all:
-        excl_names, excl_prefixes = other_mode_exclusion(args.model)
-        kept, skipped = [], []
-        for tif_path in tif_files:
-            nm = os.path.splitext(os.path.basename(tif_path))[0]
-            pref = _name_prefix(nm)
-            if nm in excl_names or pref in excl_prefixes:
-                skipped.append(nm)
-            else:
-                kept.append(tif_path)
-        if skipped:
-            print(f"Auto-excluded {len(skipped)} images belonging to the other "
-                  f"model's training family (use --all to include):")
-            for nm in skipped:
-                print(f"  - {nm}")
-        tif_files = kept
-        if not tif_files:
-            print("No tif files left after filtering")
-            sys.exit(1)
 
     wb = openpyxl.Workbook()
     summary = wb.active
@@ -496,7 +422,7 @@ def main():
                 title=img_name)
             ep_cache[img_name] = img_ep  # update in-memory cache
         name, ti, cx, cy, proba, proba_sm, pred, run_edge_info = process(
-            tif_path, model_info, args.model, pxnm=pxnm, out_dir=args.out_dir,
+            tif_path, model_info, pxnm=pxnm, out_dir=args.out_dir,
             truth=img_truth, endpoints=img_ep)
         rl = runs_of(pred)
         summary.append([name, int(pred.sum()),
@@ -526,8 +452,7 @@ def main():
                            round(float(proba_sm[i]), 4),
                            int(pred[i])])
 
-    out_xlsx = os.path.join(args.out_dir or HERE,
-                            f'{args.model}_predictions.xlsx')
+    out_xlsx = os.path.join(args.out_dir or HERE, 'predictions.xlsx')
     wb.save(out_xlsx)
     print(f"\nSaved predictions -> {out_xlsx}")
 
