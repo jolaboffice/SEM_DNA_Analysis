@@ -15,6 +15,10 @@ trace/
 edgewidth/
 heatmap/
 
+# But DO ship the bundled example
+!example/
+!example/*
+
 # OS
 .DS_Store
 Thumbs.db

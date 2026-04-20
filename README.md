@@ -38,7 +38,34 @@ pip install -r requirements.txt
 
 2. **Endpoint selection**: On first run, each script will show the image and prompt you to click the DNA start and end points. These are cached in `endpoints.json` for subsequent runs. Close the window without clicking to use the full image range.
 
-## Usage
+## Quick start with the bundled example
+
+A single Alu image (`example/Alu4.tif`) and its labeled heatmap (`example/Alu4_profile_heatmap.xlsx`) are bundled so the full pipeline can be verified without any external data.
+
+```bash
+# 1. Initialize the scale config from the shipped example (already contains Alu4)
+cp pxum_config.example.json pxum_config.json
+
+# 2. Train a classifier from the labeled heatmap
+python ML_study/ml_profile_classifier.py --dir example/
+
+# 3. Predict on the same tif
+python ML_study/predict.py example/Alu4.tif --out_dir example_out --no-interactive
+
+# 4. Generate the feature-analysis figure
+python ML_study/plot_feature_analysis.py --image Alu4 --xlsx_dir example/ \
+    --out_path example_out/feature_analysis.png
+```
+
+Expected outputs:
+* `ML_study/profile_classifier.joblib` — trained model (CV F1 ≈ 0.93 on this single image)
+* `example_out/Alu4_predict.png` — 3-panel overlay
+* `example_out/predictions.xlsx` — per-trace predictions + run summaries
+* `example_out/feature_analysis.png` — two-panel feature figure
+
+## Full workflow (with your own data)
+
+The bundled Alu4 example exercises only step 4 and later. For end-to-end processing from raw SEM/TEM images, run the steps below in order.
 
 ### Step 1: Trace DNA backbone
 ```bash
@@ -126,8 +153,18 @@ All scripts require `pxum_config.json` with per-image pixel scale in **px/um** (
 
 If an image is missing from the config, the script will interactively prompt for the value and save it automatically. Pass `--no-interactive` to error instead.
 
+## License
+
+This project is released under the MIT License — see [LICENSE](LICENSE) for details.
+
 ## Citation
 
 If you use this code, please cite:
 
-> [Your paper reference here]
+> Chanyoung Noh *et al.* "DNA-protein binding detection from SEM/TEM images using perpendicular profile classification." Manuscript in preparation, 2026.
+
+Update this entry with the final journal reference and DOI once published.
+
+## Contact
+
+Questions, issues, or pull requests are welcome via the [issue tracker](https://github.com/ChanyoungNoh/SEM_DNA_Analysis/issues).

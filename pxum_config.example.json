@@ -1,6 +1,6 @@
 {
   "_comment": "px per um (pixels per micrometer). Internally converted to nm/px via 1000/value. Every processed image MUST have an explicit entry. Copy this file to pxum_config.json and fill in your values.",
-  "image_name_1": 288.18,
-  "image_name_2": 288.18,
-  "low_mag_image": 69.06
+  "Alu4": 288.18,
+  "your_highmag_image": 288.18,
+  "your_lowmag_image": 69.06
 }
