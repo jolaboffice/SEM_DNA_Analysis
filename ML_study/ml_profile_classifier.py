@@ -680,8 +680,11 @@ def main():
                 w_u = le_u = re_u = None
                 if n_valid >= 3:
                     avg_prof = seg[valid].mean(axis=0)
+                    # σ=1 sample (~3.25 nm) Gaussian-smooth before derivative
+                    # (DoG edge detection) — suppresses noise-driven far-out
+                    # gradient extrema on short-run averaged profiles.
                     w_u, le_u, re_u, _ = measure_edge_width_subpixel(
-                        distances, avg_prof, smooth_sigma=0)
+                        distances, avg_prof, smooth_sigma=1)
 
                 if w_u is not None:
                     if width_unit == 'nm':

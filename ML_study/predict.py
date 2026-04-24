@@ -172,8 +172,11 @@ def process(tif_path, model_info, pxnm=None, out_dir=None,
         width_px = left_px = right_px = None
         if n_valid >= 3:
             avg_prof = seg[valid].mean(axis=0)
+            # σ=1 sample (~3.25 nm) Gaussian-smooth before derivative
+            # (DoG edge detection) — suppresses noise-driven far-out
+            # gradient extrema on short-run averaged profiles.
             width_px, left_px, right_px, _ = measure_edge_width_subpixel(
-                distances, avg_prof, smooth_sigma=0)
+                distances, avg_prof, smooth_sigma=1)
         run_edge_info.append((s, e, n_valid, width_px, left_px, right_px))
         w_str = (f"{width_px:.2f}px" if width_px is not None else "failed")
         if width_px is not None and pxnm is not None:
@@ -387,19 +390,44 @@ def main():
         tif_files = [args.input]
 
 
-    wb = openpyxl.Workbook()
-    summary = wb.active
-    summary.title = 'summary'
-    summary.append(['Image', 'N_pos', 'N_runs', 'Run_lengths'])
-
-    runs_ws = wb.create_sheet('runs')
-    runs_ws.append(['Image', 'Run_idx', 'Start', 'End', 'Length',
-                    'N_valid_profiles', 'Edge_width_px', 'Edge_width_nm',
-                    'Left_edge_px', 'Right_edge_px', 'pxnm'])
-
-    all_ws = wb.create_sheet('predictions')
-    all_ws.append(['Image', 'Trace_idx', 'cx_px', 'cy_px',
-                   'proba_raw', 'proba_smoothed', 'pred'])
+    out_xlsx = os.path.join(args.out_dir or HERE, 'predictions.xlsx')
+    predicting_names = {os.path.splitext(os.path.basename(t))[0]
+                        for t in tif_files}
+    # Append mode: if predictions.xlsx already exists, load it and drop rows
+    # for any image we are about to re-predict. New runs are appended, so
+    # running predict.py multiple times accumulates results instead of
+    # overwriting the file.
+    if os.path.exists(out_xlsx):
+        wb = openpyxl.load_workbook(out_xlsx)
+        summary = wb['summary']
+        runs_ws = wb['runs']
+        all_ws = wb['predictions']
+        for ws_ref in (summary, runs_ws, all_ws):
+            # collect row indices whose Image (col 1) is being re-predicted
+            stale = [r for r in range(ws_ref.max_row, 1, -1)
+                     if ws_ref.cell(r, 1).value in predicting_names]
+            for r in stale:
+                ws_ref.delete_rows(r, 1)
+        # drop any per-image sheets we're about to regenerate
+        for nm in list(wb.sheetnames):
+            if nm in ('summary', 'runs', 'predictions'):
+                continue
+            if nm in predicting_names or nm[:31] in {n[:31] for n in predicting_names}:
+                del wb[nm]
+        print(f"Appending to existing {out_xlsx} "
+              f"(replacing rows for {len(predicting_names)} image(s))")
+    else:
+        wb = openpyxl.Workbook()
+        summary = wb.active
+        summary.title = 'summary'
+        summary.append(['Image', 'N_pos', 'N_runs', 'Run_lengths'])
+        runs_ws = wb.create_sheet('runs')
+        runs_ws.append(['Image', 'Run_idx', 'Start', 'End', 'Length',
+                        'N_valid_profiles', 'Edge_width_px', 'Edge_width_nm',
+                        'Left_edge_px', 'Right_edge_px', 'pxnm'])
+        all_ws = wb.create_sheet('predictions')
+        all_ws.append(['Image', 'Trace_idx', 'cx_px', 'cy_px',
+                       'proba_raw', 'proba_smoothed', 'pred'])
 
     # Ensure every input image has a px/µm entry; prompts for missing ones
     # (or applies CLI default_pxum) and persists them.
@@ -452,7 +480,6 @@ def main():
                            round(float(proba_sm[i]), 4),
                            int(pred[i])])
 
-    out_xlsx = os.path.join(args.out_dir or HERE, 'predictions.xlsx')
     wb.save(out_xlsx)
     print(f"\nSaved predictions -> {out_xlsx}")
 
