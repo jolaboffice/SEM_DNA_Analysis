@@ -146,8 +146,7 @@ All scripts require `pxum_config.json` with per-image pixel scale in **px/um** (
 
 ```json
 {
-  "Alu1": 288.18,
-  "rrvt_17": 69.06
+  "Alu1": 288.18
 }
 ```
 
